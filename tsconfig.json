@@ -10,5 +10,6 @@
     "skipLibCheck": true,
     "outDir": "dist"
   },
-  "include": ["src", "prisma", "test", "prisma.config.ts"]
+  "include": ["src", "prisma", "test", "prisma.config.ts"],
+  "exclude": ["test", "test/**/*", "**/*.test.ts"]
 }
