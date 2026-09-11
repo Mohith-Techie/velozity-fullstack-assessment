@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "api",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["--import", "tsx", "src/server.ts"],
+      "port": 3000
+    },
+    {
+      "name": "web",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["web/node_modules/vite/bin/vite.js", "web", "--port", "5173", "--strictPort"],
+      "port": 5173
+    }
+  ]
+}

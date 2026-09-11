@@ -1,0 +1,240 @@
+// Project Management Dashboard — PostgreSQL schema
+//
+// Conventions
+// - Tables/columns are mapped to snake_case so raw SQL (cron jobs, analytics) never needs quoted identifiers.
+// - IDs are native Postgres UUIDs (16 bytes). uuid(7) is time-ordered, which keeps primary-key B-tree
+//   inserts append-only instead of scattering writes across the index.
+// - Every DateTime is timestamptz: comparisons against now() are correct regardless of the session time zone.
+// - Postgres does NOT index foreign keys automatically. Every FK column below leads some index, otherwise
+//   ON DELETE CASCADE / SET NULL would sequentially scan the child table for every deleted parent row.
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "esm"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+  PROJECT_MANAGER
+  DEVELOPER
+
+  @@map("role")
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  IN_REVIEW
+  DONE
+  /// Set by the overdue cron job. The status it replaced is recorded in ActivityLog.metadata.from.
+  OVERDUE
+
+  @@map("task_status")
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+
+  @@map("priority")
+}
+
+enum ProjectStatus {
+  PLANNING
+  ACTIVE
+  ON_HOLD
+  COMPLETED
+  ARCHIVED
+
+  @@map("project_status")
+}
+
+enum ActivityAction {
+  PROJECT_CREATED
+  PROJECT_UPDATED
+  PROJECT_DELETED
+  TASK_CREATED
+  TASK_UPDATED
+  TASK_ASSIGNED
+  TASK_STATUS_CHANGED
+  TASK_DELETED
+
+  @@map("activity_action")
+}
+
+enum NotificationType {
+  TASK_ASSIGNED
+  TASK_STATUS_CHANGED
+  TASK_DUE_SOON
+  TASK_OVERDUE
+  PROJECT_UPDATED
+
+  @@map("notification_type")
+}
+
+// ─── Models ──────────────────────────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  /// Store lower-cased; the unique index backs login lookups.
+  email        String   @unique
+  name         String
+  passwordHash String   @map("password_hash")
+  role         Role     @default(DEVELOPER)
+  /// Deactivate instead of deleting so task and activity history stays intact.
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  ownedProjects Project[]      @relation("ProjectOwner")
+  assignedTasks Task[]         @relation("TaskAssignee")
+  createdTasks  Task[]         @relation("TaskCreator")
+  activities    ActivityLog[]
+  notifications Notification[]
+  refreshTokens RefreshToken[]
+
+  @@map("users")
+}
+
+model Project {
+  id          String        @id @default(uuid(7)) @db.Uuid
+  name        String
+  description String?
+  status      ProjectStatus @default(PLANNING)
+  startDate   DateTime?     @map("start_date") @db.Timestamptz(3)
+  dueDate     DateTime?     @map("due_date") @db.Timestamptz(3)
+  /// Must be a PROJECT_MANAGER. FKs can't check roles, so enforce this in the service layer.
+  ownerId     String        @map("owner_id") @db.Uuid
+  createdAt   DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  // Restrict: a PM's projects must be reassigned before the PM can be deleted.
+  owner         User           @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  tasks         Task[]
+  activities    ActivityLog[]
+  notifications Notification[]
+
+  // PM dashboard: "my projects", optionally by status. Also backs the owner FK.
+  @@index([ownerId, status])
+  @@map("projects")
+}
+
+model Task {
+  id          String     @id @default(uuid(7)) @db.Uuid
+  title       String
+  description String?
+  status      TaskStatus @default(TODO)
+  priority    Priority   @default(MEDIUM)
+  dueDate     DateTime?  @map("due_date") @db.Timestamptz(3)
+  /// Set when status becomes DONE; drives "completed this week" / velocity widgets.
+  completedAt DateTime?  @map("completed_at") @db.Timestamptz(3)
+  projectId   String     @map("project_id") @db.Uuid
+  /// Must be a DEVELOPER (service-layer rule). Null = unassigned backlog item.
+  assigneeId  String?    @map("assignee_id") @db.Uuid
+  createdById String?    @map("created_by_id") @db.Uuid
+  createdAt   DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  project       Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  assignee      User?          @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  createdBy     User?          @relation("TaskCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  activities    ActivityLog[]
+  notifications Notification[]
+
+  // Cron jobs:
+  //   overdue sweep  WHERE status IN ('TODO','IN_PROGRESS','IN_REVIEW') AND due_date < now()
+  //   due-soon alert WHERE status IN (...same...) AND due_date BETWEEN now() AND now() + interval '1 day'
+  // Status leads so the scan only touches open tasks, never the ever-growing pile of DONE ones
+  // (a lone due_date index would walk every historical task). Also serves plain status filters.
+  @@index([status, dueDate])
+  // Project board + per-project status counts (index-only groupBy). Also backs the project FK.
+  @@index([projectId, status])
+  // Developer dashboard: "my tasks" + workload by status. Also backs the assignee FK.
+  @@index([assigneeId, status])
+  // Backs the creator FK (ON DELETE SET NULL).
+  @@index([createdById])
+  @@map("tasks")
+}
+
+/// Append-only audit trail behind the "Recent activity" feed. Rows are never updated.
+model ActivityLog {
+  id        String         @id @default(uuid(7)) @db.Uuid
+  action    ActivityAction
+  /// Human-readable summary without the actor, e.g. `moved "Fix login" from In Progress to In Review`.
+  /// Feeds render "<actor name> <message>". It's a snapshot, so displaying it never needs joins.
+  message   String
+  /// Action-specific details, e.g. {"from":"IN_PROGRESS","to":"IN_REVIEW"} or
+  /// {"field":"priority","from":"MEDIUM","to":"HIGH"}. For TASK_DELETED, snapshot the title here
+  /// so the entry stays readable after task_id is nulled.
+  metadata  Json?
+  /// Null = system actor (e.g. the overdue cron job).
+  actorId   String?        @map("actor_id") @db.Uuid
+  projectId String?        @map("project_id") @db.Uuid
+  taskId    String?        @map("task_id") @db.Uuid
+  createdAt DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  // SET NULL everywhere: deleting a user, project or task must not erase history.
+  actor   User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  project Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  task    Task?    @relation(fields: [taskId], references: [id], onDelete: SetNull)
+
+  // Admin feed: ORDER BY created_at DESC LIMIT n
+  @@index([createdAt(sort: Desc)])
+  // Project / task / user feeds (equality + newest-first, no sort step). Each also backs its FK.
+  @@index([projectId, createdAt(sort: Desc)])
+  @@index([taskId, createdAt(sort: Desc)])
+  @@index([actorId, createdAt(sort: Desc)])
+  @@map("activity_logs")
+}
+
+model Notification {
+  id          String           @id @default(uuid(7)) @db.Uuid
+  type        NotificationType
+  message     String
+  isRead      Boolean          @default(false) @map("is_read")
+  recipientId String           @map("recipient_id") @db.Uuid
+  projectId   String?          @map("project_id") @db.Uuid
+  taskId      String?          @map("task_id") @db.Uuid
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  recipient User     @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  task      Task?    @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  // Bell icon: unread badge count (index-only) + unread list newest-first. Also backs the recipient FK.
+  @@index([recipientId, isRead, createdAt(sort: Desc)])
+  // Back the cascade FKs.
+  @@index([projectId])
+  @@index([taskId])
+  @@map("notifications")
+}
+
+/// One row per issued refresh token. Only a SHA-256 hash is stored; the raw token lives in the client's
+/// HttpOnly cookie. Tokens from one login share a family_id: each refresh revokes the presented token and
+/// issues a successor, and presenting an already-revoked token revokes the whole family (theft detection).
+model RefreshToken {
+  id        String    @id @default(uuid(7)) @db.Uuid
+  tokenHash String    @unique @map("token_hash")
+  familyId  String    @map("family_id") @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(3)
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Revoke a whole session (reuse detection, logout).
+  @@index([familyId])
+  // Backs the user FK (cascade) and revoking all of a user's sessions.
+  @@index([userId])
+  @@map("refresh_tokens")
+}
