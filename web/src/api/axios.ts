@@ -8,11 +8,14 @@ export interface TokenResponse {
   user: AuthUser;
 }
 
-/** For the auth endpoints themselves. No interceptors, so a failing refresh can never trigger another refresh. */
-export const authClient = axios.create({ baseURL: '/api', withCredentials: true });
+const BACKEND_URL = import.meta.env.VITE_API_URL || 'https://velozity-fullstack-assessment.onrender.com';
 
-/** For every other API call: attaches the access token and, on a 401, refreshes it once and retries. */
-export const api = axios.create({ baseURL: '/api', withCredentials: true });
+/** for the auth endpoints themselves. No interceptors, so a failing refresh can never trigger another refresh. */
+export const authClient = axios.create({ baseURL: `${BACKEND_URL}/api`, withCredentials: true });
+
+/** For every other API call: attaches the access token and, on a 401,
+ refreshes it once and retries. */
+export const api = axios.create({ baseURL: `${BACKEND_URL}/api`, withCredentials: true });
 
 let refreshInFlight: Promise<string> | null = null;
 
