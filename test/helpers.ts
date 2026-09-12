@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { createApp } from '../src/app.js';
+import { databaseHost, isLocalDatabase } from '../src/lib/databaseUrl.js';
 import { prisma } from '../src/lib/prisma.js';
 import { attachSocketServer } from '../src/realtime/socket.js';
 
@@ -14,6 +15,12 @@ export let baseUrl = '';
 
 /** Re-seeds the database, starts the API + Socket.IO on a random port, and returns a stop function. */
 export async function startTestServer(): Promise<() => Promise<void>> {
+  const url = process.env.DATABASE_URL ?? '';
+  if (!isLocalDatabase(url)) {
+    throw new Error(
+      `Tests wipe and re-seed the database, so they only run against a local one; DATABASE_URL points at "${databaseHost(url)}".`,
+    );
+  }
   execFileSync(process.execPath, ['--import', 'tsx', 'prisma/seed.ts'], { stdio: 'pipe' });
   const httpServer = createServer(createApp());
   const io = attachSocketServer(httpServer);

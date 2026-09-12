@@ -55,6 +55,8 @@ export function attachSocketServer(httpServer: HttpServer): ActivityServer {
   const server: ActivityServer = new Server(httpServer, {
     serveClient: false,
     maxHttpBufferSize: 16 * 1024, // clients never send anything large
+    // WebSocket only: HTTP long-polling is disabled, so no connection can fall back to polling.
+    transports: ['websocket'],
   });
 
   // Handshake authentication, before a socket can join anything. The access token comes in the connect

@@ -59,7 +59,7 @@ const REFRESH_TTL_MS = env.REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000;
 const refreshCookieOptions: CookieOptions = {
   httpOnly: true,
   secure: true,
-  sameSite: "none",
+  sameSite: 'strict',
   path: "/api/auth",
 };
 

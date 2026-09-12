@@ -8,14 +8,16 @@ export interface TokenResponse {
   user: AuthUser;
 }
 
-const BACKEND_URL = import.meta.env.VITE_API_URL || 'https://velozity-fullstack-assessment.onrender.com';
+// Same-origin in every environment: Vite proxies /api to the local API in development, and a Vercel rewrite
+// (web/vercel.json) forwards it to the Render backend in production. Keeping the API first-party is what lets
+// the refresh cookie stay SameSite=Strict; browsers that block third-party cookies would otherwise drop it.
+const API_BASE = '/api';
 
-/** for the auth endpoints themselves. No interceptors, so a failing refresh can never trigger another refresh. */
-export const authClient = axios.create({ baseURL: `${BACKEND_URL}/api`, withCredentials: true });
+/** For the auth endpoints themselves. No interceptors, so a failing refresh can never trigger another refresh. */
+export const authClient = axios.create({ baseURL: API_BASE, withCredentials: true });
 
-/** For every other API call: attaches the access token and, on a 401,
- refreshes it once and retries. */
-export const api = axios.create({ baseURL: `${BACKEND_URL}/api`, withCredentials: true });
+/** For every other API call: attaches the access token and, on a 401, refreshes it once and retries. */
+export const api = axios.create({ baseURL: API_BASE, withCredentials: true });
 
 let refreshInFlight: Promise<string> | null = null;
 

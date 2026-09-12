@@ -14,6 +14,7 @@ import { randomUUID } from 'node:crypto';
 import bcrypt from 'bcrypt';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { projectActions, taskActions, type ActionMessage } from '../src/activity/actions.js';
+import { databaseHost, isLocalDatabase } from '../src/lib/databaseUrl.js';
 import {
   PrismaClient,
   type NotificationType,
@@ -22,13 +23,18 @@ import {
   type TaskStatus,
 } from '../src/generated/prisma/client.js';
 
-const { DATABASE_URL, NODE_ENV, SEED_ALLOW_PRODUCTION, SEED_USER_PASSWORD } = process.env;
+const { DATABASE_URL, NODE_ENV, SEED_ALLOW_REMOTE, SEED_USER_PASSWORD } = process.env;
 
 if (!DATABASE_URL) {
   throw new Error('DATABASE_URL is not set. Copy .env.example to .env and point it at your database.');
 }
-if (NODE_ENV === 'production' && SEED_ALLOW_PRODUCTION !== 'true') {
-  throw new Error('Refusing to wipe a production database. Set SEED_ALLOW_PRODUCTION=true to override.');
+// This script wipes every table, and the test suite runs it too. Only a local database may be wiped by
+// default, so a .env that points at the hosted database can never be reset by accident.
+if ((NODE_ENV === 'production' || !isLocalDatabase(DATABASE_URL)) && SEED_ALLOW_REMOTE !== 'true') {
+  throw new Error(
+    `Refusing to wipe the database at "${databaseHost(DATABASE_URL) || 'an unparseable URL'}". ` +
+      'Seed a local database, or set SEED_ALLOW_REMOTE=true to reset this one on purpose.',
+  );
 }
 
 const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: DATABASE_URL }) });

@@ -50,13 +50,15 @@ node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
 | `OVERDUE_SWEEP_CRON` | `0 * * * *` | Overdue sweep schedule (cron syntax, UTC) |
 | `JOBS_ENABLED` | `true` | Set to `false` to run an instance without background jobs |
 | `SEED_USER_PASSWORD` | `Password123!` | Password given to every seeded user |
+| `SEED_ALLOW_REMOTE` | `false` | Must be `true` for the seed to wipe a non-local database (e.g. the hosted demo) |
+| `FRONTEND_URL` | the Vercel URL | Origin allowed by CORS, for clients calling the API directly |
 
 ### 4. Create the schema and load demo data
 
 ```bash
 npm run db:generate   # generate the Prisma client (src/generated is not committed)
 npm run db:deploy     # apply the migrations in prisma/migrations
-npm run db:seed       # wipe and load realistic demo data
+npm run db:seed       # wipe and load realistic demo data (refuses non-local databases)
 ```
 
 ### 5. Start the backend and the frontend (two terminals)
@@ -79,7 +81,7 @@ Open **http://localhost:5173**. In development, Vite proxies `/api` and `/socket
 ### Tests and checks
 
 ```bash
-npm test                   # backend integration tests (re-seeds the DATABASE_URL database; use a dev DB)
+npm test                   # backend integration tests (wipe and re-seed the database; local databases only)
 npm run typecheck          # backend type check
 npm --prefix web run build # frontend type check + production build
 ```

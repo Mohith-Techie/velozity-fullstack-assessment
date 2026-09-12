@@ -10,6 +10,13 @@ interface SocketState {
   status: ConnectionStatus;
 }
 
+/**
+ * Where the socket connects. Unset (development): same origin, where Vite proxies /socket.io to the local API.
+ * Production: the Render backend directly (VITE_SOCKET_URL in web/.env.production), because Vercel rewrites
+ * can't proxy WebSockets. No cookie is involved: the socket authenticates with the access token.
+ */
+const SOCKET_URL: string | undefined = import.meta.env.VITE_SOCKET_URL || undefined;
+
 const SocketContext = createContext<SocketState>({ socket: null, status: 'connecting' });
 
 /**
@@ -26,16 +33,12 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     if (!userId) return;
     let active = true;
     let reauthAttempted = false;
-    
-    // Explicitly set the Render backend URL
-    const BACKEND_URL = import.meta.env.VITE_API_URL || 'https://velozity-fullstack-assessment.onrender.com';
-    
-    // Pass the backend URL as the first parameter to io()
-    const socket = io(BACKEND_URL, {
+
+    const socket = io(SOCKET_URL, {
       auth: (send) => send({ token: useAuthStore.getState().accessToken }),
       transports: ['websocket'],
     });
-    
+
     const setStatus = (status: ConnectionStatus) => {
       if (active) setState({ socket, status });
     };
