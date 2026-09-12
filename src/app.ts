@@ -7,6 +7,10 @@ import { authRouter, dashboardRouter, feedRouter, notificationRouter, projectRou
 export function createApp() {
   const app = express();
   app.disable('x-powered-by');
+  app.use(cors({
+    origin: process.env.FRONTEND_URL || 'https://velozity-fullstack-assessment.vercel.app',
+    credentials: true,
+  }));
   app.use(express.json({ limit: '100kb' }));
   app.use(cookieParser());
 
