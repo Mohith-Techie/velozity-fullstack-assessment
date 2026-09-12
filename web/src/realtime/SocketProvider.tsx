@@ -26,10 +26,16 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     if (!userId) return;
     let active = true;
     let reauthAttempted = false;
-    const socket = io({
+    
+    // Explicitly set the Render backend URL
+    const BACKEND_URL = import.meta.env.VITE_API_URL || 'https://velozity-fullstack-assessment.onrender.com';
+    
+    // Pass the backend URL as the first parameter to io()
+    const socket = io(BACKEND_URL, {
       auth: (send) => send({ token: useAuthStore.getState().accessToken }),
       transports: ['websocket'],
     });
+    
     const setStatus = (status: ConnectionStatus) => {
       if (active) setState({ socket, status });
     };
